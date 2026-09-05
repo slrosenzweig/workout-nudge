@@ -1,4 +1,4 @@
-"""Scheduled jobs: morning nudge (~8:15) and 10:00 compare follow-up."""
+"""Scheduled jobs: sync (8:00), report (8:30), compare (10:00)."""
 
 from __future__ import annotations
 
@@ -29,22 +29,47 @@ def yesterday_ny(cfg: Config) -> date:
     return today_ny(cfg) - timedelta(days=1)
 
 
-def nudge(cfg: Config, store: Store | None = None) -> dict:
-    """Morning job: Oura fetch, train/rest SMS, yesterday ask."""
+def _score(obj: dict | None, key: str = "score") -> int | None:
+    if not obj:
+        return None
+    val = obj.get(key)
+    try:
+        return int(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def sync(cfg: Config, store: Store | None = None) -> dict:
+    """8:00 job: remind A to open Oura and sync the ring (no scores)."""
+    store = store or Store(cfg.database_path)
+    a, _b = cfg.require_participants()
+    today = today_ny(cfg)
+    result: dict = {"day": today.isoformat(), "actions": []}
+    sms.send_sms(cfg, a, sms.msg_sync_ring())
+    result["actions"].append({"to": "A", "kind": "sync_ring"})
+    log.info("sync complete: %s", result)
+    return result
+
+
+def report(cfg: Config, store: Store | None = None) -> dict:
+    """8:30 job: Oura fetch, today intent, yesterday status, SMS report (no partner)."""
     store = store or Store(cfg.database_path)
     a, b = cfg.require_participants()
     today = today_ny(cfg)
     yesterday = yesterday_ny(cfg)
+    today_s = today.isoformat()
+    yesterday_s = yesterday.isoformat()
     result: dict = {
-        "day": today.isoformat(),
-        "yesterday": yesterday.isoformat(),
+        "day": today_s,
+        "yesterday": yesterday_s,
         "decision": None,
         "actions": [],
     }
 
-    # --- Oura for A ---
     if not cfg.oura_client_id or not cfg.oura_client_secret:
-        raise RuntimeError("OURA_CLIENT_ID and OURA_CLIENT_SECRET required for nudge")
+        raise RuntimeError(
+            "OURA_CLIENT_ID and OURA_CLIENT_SECRET required for report"
+        )
 
     client = oura_mod.OuraClient(
         client_id=cfg.oura_client_id,
@@ -52,156 +77,243 @@ def nudge(cfg: Config, store: Store | None = None) -> dict:
         tokens_path=cfg.oura_tokens_path,
     )
     bundle = client.fetch_day_bundle(today)
-    readiness = bundle.get("readiness") or {}
-    sleep = bundle.get("sleep")
-    score = readiness.get("score")
-    try:
-        score_i = int(score) if score is not None else None
-    except (TypeError, ValueError):
-        score_i = None
+    readiness = bundle.get("readiness") if isinstance(bundle.get("readiness"), dict) else None
+    sleep = bundle.get("sleep") if isinstance(bundle.get("sleep"), dict) else None
+    activity = bundle.get("activity") if isinstance(bundle.get("activity"), dict) else None
 
-    solid = rules.sleep_looks_solid(sleep if isinstance(sleep, dict) else None)
+    score_i = _score(readiness)
+    activity_i = _score(activity)
+    solid = rules.sleep_looks_solid(sleep)
     train = rules.should_train(readiness_score=score_i, sleep_looks_solid=solid)
-    result["decision"] = "train" if train else "rest"
+    today_intent = "train" if train else "rest"
+    result["decision"] = today_intent
     result["readiness_score"] = score_i
+    result["activity_score"] = activity_i
 
-    if train and score_i is not None:
-        body = sms.msg_train(score_i)
-    else:
-        body = sms.msg_rest()
+    store.set_today_intent(today_s, a, today_intent)
 
-    sms.send_sms(cfg, a, body)
-    result["actions"].append({"to": "A", "kind": "train" if train else "rest"})
-
-    # Train day: also SMS B if opted in. Rest day: A only.
-    if train and store.is_opted_in(b):
-        sms.send_sms(cfg, b, body)
-        result["actions"].append({"to": "B", "kind": "train"})
-
-    # --- Yesterday workouts ---
+    # Yesterday for A: Oura lock or ask
     y_workouts = bundle.get("yesterday_workouts") or []
+    ask_yesterday_a = False
+    yesterday_trained_a: bool | None = None
     if rules.yesterday_trained(y_workouts):
-        store.set_status(yesterday.isoformat(), a, True, source="oura")
+        store.set_status(yesterday_s, a, True, source="oura")
+        yesterday_trained_a = True
         result["yesterday_trained_a"] = True
         result["actions"].append({"to": "A", "kind": "skip_ask_oura_yes"})
-        # Still ask B if opted in and unknown
-        status_b = store.get_status(yesterday.isoformat(), b)
-        if store.is_opted_in(b) and (
-            status_b is None or status_b.trained is None
-        ):
-            sms.send_sms(cfg, b, sms.msg_ask_yesterday())
-            result["actions"].append({"to": "B", "kind": "ask_yesterday"})
     else:
         result["yesterday_trained_a"] = False
-        # Ask A
-        status_a = store.get_status(yesterday.isoformat(), a)
+        status_a = store.get_status(yesterday_s, a)
         if status_a is None or status_a.trained is None:
-            sms.send_sms(cfg, a, sms.msg_ask_yesterday())
-            result["actions"].append({"to": "A", "kind": "ask_yesterday"})
-        if store.is_opted_in(b):
-            status_b = store.get_status(yesterday.isoformat(), b)
-            if status_b is None or status_b.trained is None:
-                sms.send_sms(cfg, b, sms.msg_ask_yesterday())
-                result["actions"].append({"to": "B", "kind": "ask_yesterday"})
+            ask_yesterday_a = True
+        else:
+            yesterday_trained_a = status_a.trained
 
-    # If both already known after Oura auto-yes, send comparison
-    if store.both_statuses_known(yesterday.isoformat(), a, b):
-        if not store.comparison_was_sent(yesterday.isoformat()):
-            _send_comparison(cfg, store, yesterday.isoformat(), a, b, result)
+    sms.send_sms(
+        cfg,
+        a,
+        sms.msg_report_a(
+            readiness_score=score_i,
+            activity_score=activity_i,
+            today_intent=today_intent,
+            yesterday_trained=yesterday_trained_a,
+            ask_yesterday=ask_yesterday_a,
+        ),
+    )
+    result["actions"].append({"to": "A", "kind": "report"})
 
-    log.info("nudge complete: %s", result)
+    # B: ask YES/NO + TRAIN/REST if opted in (no partner comparison)
+    if store.is_opted_in(b):
+        need_y = not store.yesterday_known(yesterday_s, b)
+        need_i = not store.today_intent_known(today_s, b)
+        if need_y or need_i:
+            if need_y and need_i:
+                body = sms.msg_ask_b()
+            else:
+                body = sms.msg_ask_incomplete(
+                    need_yesterday=need_y, need_intent=need_i
+                )
+            sms.send_sms(cfg, b, body)
+            result["actions"].append({"to": "B", "kind": "ask_yesterday_and_intent"})
+
+    log.info("report complete: %s", result)
     return result
 
 
+# Deprecated alias for the old morning job
+def nudge(cfg: Config, store: Store | None = None) -> dict:
+    """Alias for report (deprecated name)."""
+    return report(cfg, store)
+
+
 def compare(cfg: Config, store: Store | None = None) -> dict:
-    """10:00 follow-up: comparison, nag, or reminder."""
+    """10:00 follow-up: partner updates (yesterday + today_intent), or reminders."""
     store = store or Store(cfg.database_path)
     a, b = cfg.require_participants()
+    today = today_ny(cfg)
     yesterday = yesterday_ny(cfg)
-    d = yesterday.isoformat()
-    result: dict = {"yesterday": d, "actions": []}
+    today_s = today.isoformat()
+    yesterday_s = yesterday.isoformat()
+    result: dict = {
+        "day": today_s,
+        "yesterday": yesterday_s,
+        "actions": [],
+    }
 
-    sa = store.get_status(d, a)
-    sb = store.get_status(d, b)
-    a_known = sa is not None and sa.trained is not None
-    b_known = sb is not None and sb.trained is not None
-
-    if a_known and b_known:
-        if store.comparison_was_sent(d):
-            result["actions"].append({"kind": "noop_already_sent"})
-        else:
-            _send_comparison(cfg, store, d, a, b, result)
+    if store.partner_update_was_sent(today_s):
+        result["actions"].append({"kind": "noop_already_sent"})
         log.info("compare complete: %s", result)
         return result
 
-    if a_known and not b_known:
-        # SMS A that B hasn't answered. Don't invent. Don't text B if not opted in.
-        sms.send_sms(cfg, a, sms.msg_partner_no_answer())
-        result["actions"].append({"to": "A", "kind": "partner_no_answer"})
-        # If B opted in, remind them once
+    if store.both_complete(yesterday_s, today_s, a, b):
+        _send_partner_updates(cfg, store, yesterday_s, today_s, a, b, result)
+        log.info("compare complete: %s", result)
+        return result
+
+    a_done = store.participant_complete(yesterday_s, today_s, a)
+    b_done = store.participant_complete(yesterday_s, today_s, b)
+
+    if a_done and not b_done:
+        sms.send_sms(cfg, a, sms.msg_partner_no_update())
+        result["actions"].append({"to": "A", "kind": "partner_no_update"})
         if store.is_opted_in(b):
-            sms.send_sms(cfg, b, sms.msg_ask_yesterday())
-            result["actions"].append({"to": "B", "kind": "reminder_ask"})
+            _remind_incomplete(cfg, store, yesterday_s, today_s, b, "B", result)
         log.info("compare complete: %s", result)
         return result
 
-    if b_known and not a_known:
+    if b_done and not a_done:
         if store.is_opted_in(b):
-            sms.send_sms(cfg, b, sms.msg_partner_no_answer())
-            result["actions"].append({"to": "B", "kind": "partner_no_answer"})
-        sms.send_sms(cfg, a, sms.msg_ask_yesterday())
-        result["actions"].append({"to": "A", "kind": "reminder_ask"})
+            sms.send_sms(cfg, b, sms.msg_partner_no_update())
+            result["actions"].append({"to": "B", "kind": "partner_no_update"})
+        _remind_incomplete(cfg, store, yesterday_s, today_s, a, "A", result)
         log.info("compare complete: %s", result)
         return result
 
-    # Neither known: one reminder YES/NO (B only if opted in)
-    sms.send_sms(cfg, a, sms.msg_ask_yesterday())
-    result["actions"].append({"to": "A", "kind": "reminder_ask"})
+    # Neither complete
+    _remind_incomplete(cfg, store, yesterday_s, today_s, a, "A", result)
     if store.is_opted_in(b):
-        sms.send_sms(cfg, b, sms.msg_ask_yesterday())
-        result["actions"].append({"to": "B", "kind": "reminder_ask"})
+        _remind_incomplete(cfg, store, yesterday_s, today_s, b, "B", result)
 
     log.info("compare complete: %s", result)
     return result
 
 
-def _send_comparison(
+def _remind_incomplete(
     cfg: Config,
     store: Store,
-    date: str,
+    yesterday_s: str,
+    today_s: str,
+    phone: str,
+    label: str,
+    result: dict,
+) -> None:
+    need_y = not store.yesterday_known(yesterday_s, phone)
+    need_i = not store.today_intent_known(today_s, phone)
+    if not need_y and not need_i:
+        return
+    sms.send_sms(
+        cfg,
+        phone,
+        sms.msg_ask_incomplete(need_yesterday=need_y, need_intent=need_i),
+    )
+    result["actions"].append(
+        {
+            "to": label,
+            "kind": "reminder_ask",
+            "need_yesterday": need_y,
+            "need_intent": need_i,
+        }
+    )
+
+
+def _send_partner_updates(
+    cfg: Config,
+    store: Store,
+    yesterday_s: str,
+    today_s: str,
     a: str,
     b: str,
     result: dict,
 ) -> None:
-    sa = store.get_status(date, a)
-    sb = store.get_status(date, b)
-    assert sa and sb and sa.trained is not None and sb.trained is not None
+    sa_y = store.get_status(yesterday_s, a)
+    sb_y = store.get_status(yesterday_s, b)
+    sa_t = store.get_status(today_s, a)
+    sb_t = store.get_status(today_s, b)
+    assert (
+        sa_y
+        and sb_y
+        and sa_t
+        and sb_t
+        and sa_y.trained is not None
+        and sb_y.trained is not None
+        and sa_t.today_intent in ("train", "rest")
+        and sb_t.today_intent in ("train", "rest")
+    )
 
     # A always gets partner (B) status
-    sms.send_sms(cfg, a, sms.msg_partner_comparison(sb.trained))
-    result["actions"].append({"to": "A", "kind": "comparison", "partner_trained": sb.trained})
+    sms.send_sms(
+        cfg,
+        a,
+        sms.msg_partner_update(
+            partner_trained_yesterday=sb_y.trained,
+            partner_today_intent=sb_t.today_intent,
+        ),
+    )
+    result["actions"].append(
+        {
+            "to": "A",
+            "kind": "partner_update",
+            "partner_trained": sb_y.trained,
+            "partner_intent": sb_t.today_intent,
+        }
+    )
 
-    # B only if opted in
     if store.is_opted_in(b):
-        sms.send_sms(cfg, b, sms.msg_partner_comparison(sa.trained))
+        sms.send_sms(
+            cfg,
+            b,
+            sms.msg_partner_update(
+                partner_trained_yesterday=sa_y.trained,
+                partner_today_intent=sa_t.today_intent,
+            ),
+        )
         result["actions"].append(
-            {"to": "B", "kind": "comparison", "partner_trained": sa.trained}
+            {
+                "to": "B",
+                "kind": "partner_update",
+                "partner_trained": sa_y.trained,
+                "partner_intent": sa_t.today_intent,
+            }
         )
 
-    store.mark_comparison_sent(date)
+    store.mark_partner_update_sent(today_s)
 
 
+def maybe_send_partner_update_after_inbound(
+    cfg: Config,
+    store: Store,
+) -> bool:
+    """Late path: if both complete, local time ≥10:00 NY, and not yet sent."""
+    a, b = cfg.require_participants()
+    tz = _tz(cfg)
+    now = datetime.now(tz)
+    if now.hour < 10:
+        return False
+    today_s = now.date().isoformat()
+    yesterday_s = (now.date() - timedelta(days=1)).isoformat()
+    if store.partner_update_was_sent(today_s):
+        return False
+    if not store.both_complete(yesterday_s, today_s, a, b):
+        return False
+    result: dict = {"actions": []}
+    _send_partner_updates(cfg, store, yesterday_s, today_s, a, b, result)
+    return True
+
+
+# Backward-compatible name
 def maybe_send_comparison_after_inbound(
     cfg: Config,
     store: Store,
-    date: str,
+    date: str | None = None,
 ) -> bool:
-    """When both statuses known after inbound, SMS each whether the other trained."""
-    a, b = cfg.require_participants()
-    if not store.both_statuses_known(date, a, b):
-        return False
-    if store.comparison_was_sent(date):
-        return False
-    result: dict = {"actions": []}
-    _send_comparison(cfg, store, date, a, b, result)
-    return True
+    return maybe_send_partner_update_after_inbound(cfg, store)

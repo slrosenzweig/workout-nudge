@@ -1,6 +1,7 @@
 """Tests for inbound SMS intent parsing."""
 
 from workout_nudge.parse import Intent, parse_intent
+from workout_nudge import sms
 
 
 def test_yes_variants():
@@ -27,3 +28,35 @@ def test_start_stop():
 
 def test_did_as_yes():
     assert parse_intent("did") is Intent.WORKOUT_YES
+
+
+def test_train_variants():
+    assert parse_intent("TRAIN") is Intent.TODAY_TRAIN
+    assert parse_intent("train") is Intent.TODAY_TRAIN
+    assert parse_intent("train day") is Intent.TODAY_TRAIN
+    assert parse_intent("training") is Intent.TODAY_TRAIN
+    assert parse_intent("train today") is Intent.TODAY_TRAIN
+
+
+def test_rest_variants():
+    assert parse_intent("REST") is Intent.TODAY_REST
+    assert parse_intent("rest") is Intent.TODAY_REST
+    assert parse_intent("rest day") is Intent.TODAY_REST
+    assert parse_intent("resting") is Intent.TODAY_REST
+    assert parse_intent("rest today") is Intent.TODAY_REST
+
+
+def test_sms_brand_sarah():
+    assert sms.msg_sync_ring().startswith("Winter Rose:")
+    assert sms.msg_ask_yesterday().startswith("Winter Rose:")
+    assert sms.msg_ask_b().startswith("Winter Rose:")
+    assert sms.msg_partner_update(
+        partner_trained_yesterday=True, partner_today_intent="rest"
+    ).startswith("Winter Rose:")
+    assert "trained yesterday" in sms.msg_partner_update(
+        partner_trained_yesterday=True, partner_today_intent="rest"
+    )
+    assert "plans to rest today" in sms.msg_partner_update(
+        partner_trained_yesterday=True, partner_today_intent="rest"
+    )
+    assert sms.msg_sync_ring().startswith("Winter Rose:")

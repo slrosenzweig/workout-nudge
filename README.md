@@ -1,8 +1,10 @@
-# Winter Rose — workout-nudge
+# workout-nudge (SMS brand: Winter Rose)
 
 Daily workout accountability SMS for two participants (America/New_York, 7 days a week).
 
 Participant A has an Oura Ring. Participant B is SMS-only after `START` opt-in.
+
+User-facing SMS are prefixed with **Winter Rose:**. Address the person running the service as Sarah in chat; Winter Rose is the SMS brand only.
 
 **Do not commit secrets, real phone numbers, Twilio SIDs, or Oura tokens.**
 
@@ -61,24 +63,36 @@ Prints JSON: `day`, `yesterday`, `readiness`, `sleep`, `activity`, `yesterday_wo
 ## CLI
 
 ```bash
-python -m workout_nudge nudge    # ~8:15 morning job
-python -m workout_nudge compare  # 10:00 follow-up
+python -m workout_nudge sync     # 8:00 — remind A to sync Oura ring
+python -m workout_nudge report   # 8:30 — scores, today intent, yesterday ask
+python -m workout_nudge compare  # 10:00 — partner update or reminders
 python -m workout_nudge serve    # Twilio inbound webhook
 ```
 
-### Morning job (`nudge`)
+`nudge` is a deprecated alias for `report`.
+
+### 8:00 job (`sync`)
+
+SMS participant A only: open Oura and sync the ring. No scores.
+
+Example: `Winter Rose: Good morning — open Oura and sync your ring so we can pull today’s scores. Reply STOP to opt out.`
+
+### 8:30 job (`report`)
 
 1. Fetch Oura for A (today readiness/sleep/activity; workouts yesterday..today).
-2. Train if readiness ≥ 70 and sleep looks solid; else rest.
-3. SMS A (train or rest). On train days, also SMS B if opted in.
-4. If any yesterday workout qualifies → record A=yes (no YES/NO ask for A). Else ask A (and B if opted in).
+2. `today_intent`: train if readiness ≥ 70 and sleep looks solid; else rest. Save in store.
+3. Yesterday: if any workout qualifies → record A=yes (no ask). Else SMS YES/NO ask (included in A’s report).
+4. SMS A one report: readiness/activity, today intent, yesterday train/rest (or ask).
+5. If B opted in: SMS asking YES/NO for yesterday **and** TRAIN/REST for today.
+6. Does **not** send partner comparison.
 
 ### 10:00 job (`compare`)
 
-- Both known + comparison already sent → no-op
-- Both known + not sent → send partner comparison
-- Only one known → tell that person the other hasn't answered; remind the other if appropriate
-- Neither known → one YES/NO reminder (B only if opted in)
+- Both complete (yesterday + `today_intent` for A and B) and partner update not yet sent → SMS each the other’s yesterday **and** the other’s today intent; mark `partner_update_sent`.
+- Else remind incomplete participants; tell the complete person the other hasn’t updated.
+- Idempotent if partner update already sent.
+
+Partner example: `Winter Rose: Your partner trained yesterday and plans to rest today. Reply STOP to opt out.`
 
 ### Inbound webhook
 
@@ -88,20 +102,22 @@ Validates `X-Twilio-Signature` when `TWILIO_AUTH_TOKEN` is set.
 
 - `START` / `UNSTOP` → opt in
 - `STOP` / `CANCEL` / … → opt out
-- `YES` / `NO` (and variants) → yesterday workout status; when both known, send comparison
+- `YES` / `NO` (and variants) → yesterday workout status
+- `TRAIN` / `REST` (and variants, e.g. `train day`, `rest day`) → today intent
+- Late path: if both complete, local time ≥ 10:00 America/New_York, and partner update not sent → send partner updates
 
 Point Twilio’s messaging webhook at your public HTTPS URL ending in `/webhooks/twilio/sms`.
 
 ## Cron (America/New_York)
 
 ```cron
-15 8 * * * cd /path/to/workout-nudge && .venv/bin/python -m workout_nudge nudge
+CRON_TZ=America/New_York
+0 8 * * * cd /path/to/workout-nudge && .venv/bin/python -m workout_nudge sync
+30 8 * * * cd /path/to/workout-nudge && .venv/bin/python -m workout_nudge report
 0 10 * * * cd /path/to/workout-nudge && .venv/bin/python -m workout_nudge compare
 ```
 
-Use a timezone-aware cron (`CRON_TZ=America/New_York`) or run on a host set to that zone.
-
-Keep `serve` running under systemd/supervisor (or a process manager) for inbound SMS.
+Keep `serve` running under systemd/supervisor (or a process manager) for inbound SMS (including late TRAIN/REST / YES/NO replies).
 
 ## Workout qualification (locked)
 

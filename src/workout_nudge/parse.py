@@ -1,4 +1,4 @@
-"""Inbound SMS body parsing: YES/NO/STOP/START and variants."""
+"""Inbound SMS body parsing: YES/NO/TRAIN/REST/STOP/START and variants."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ class Intent(str, Enum):
     OPT_OUT = "opt_out"
     WORKOUT_YES = "workout_yes"
     WORKOUT_NO = "workout_no"
+    TODAY_TRAIN = "today_train"
+    TODAY_REST = "today_rest"
     UNKNOWN = "unknown"
 
 
@@ -55,6 +57,28 @@ _NO = frozenset(
     }
 )
 
+_TRAIN = frozenset(
+    {
+        "train",
+        "training",
+        "train day",
+        "train today",
+        "training day",
+        "training today",
+    }
+)
+
+_REST = frozenset(
+    {
+        "rest",
+        "resting",
+        "rest day",
+        "rest today",
+        "resting day",
+        "resting today",
+    }
+)
+
 
 def normalize_body(body: str | None) -> str:
     if not body:
@@ -65,11 +89,9 @@ def normalize_body(body: str | None) -> str:
 def parse_intent(body: str | None) -> Intent:
     """Classify inbound SMS.
 
-    Exact YES/NO (and variants) are workout answers.
-    START/UNSTOP are opt-in only (unless body is exactly a workout YES word —
-    YES is workout_yes, which also implies the sender is engaged; callers may
-    treat WORKOUT_YES as opt-in for known numbers when appropriate).
-    STOP family is opt-out.
+    Exact YES/NO (and variants) are yesterday workout answers.
+    TRAIN/REST (and variants) are today intent.
+    START/UNSTOP are opt-in; STOP family is opt-out.
     """
     text = normalize_body(body)
     if not text:
@@ -79,11 +101,15 @@ def parse_intent(body: str | None) -> Intent:
     if text in _OPT_OUT:
         return Intent.OPT_OUT
 
-    # Exact YES/NO as workout answers (before generic START)
     if text in _YES:
         return Intent.WORKOUT_YES
     if text in _NO:
         return Intent.WORKOUT_NO
+
+    if text in _TRAIN:
+        return Intent.TODAY_TRAIN
+    if text in _REST:
+        return Intent.TODAY_REST
 
     if text in _OPT_IN:
         return Intent.OPT_IN
