@@ -1,4 +1,4 @@
-"""SQLite persistence: opt_in, daily_status (trained + today_intent), partner_update_sent."""
+"""SQLite persistence: opt_in, daily_status, partner_update_sent, weekly_goal."""
 
 from __future__ import annotations
 
@@ -65,6 +65,14 @@ class Store:
                 CREATE TABLE IF NOT EXISTS comparison_sent (
                     date TEXT PRIMARY KEY,
                     sent_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS weekly_goal (
+                    participant TEXT NOT NULL,
+                    week_of TEXT NOT NULL,
+                    goal_days INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (participant, week_of)
                 );
                 """
             )
@@ -213,3 +221,57 @@ class Store:
     def both_statuses_known(self, date: str, a: str, b: str) -> bool:
         """Legacy: both yesterday trained known for date."""
         return self.yesterday_known(date, a) and self.yesterday_known(date, b)
+
+
+    def set_weekly_goal(self, participant: str, week_of: str, goal_days: int) -> None:
+        """Set weekly commitment (goal_days 0–7) for week_of (Monday ISO date)."""
+        if goal_days < 0 or goal_days > 7:
+            raise ValueError(f"goal_days must be 0–7, got {goal_days}")
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO weekly_goal (participant, week_of, goal_days, updated_at)
+                VALUES (?, ?, ?, datetime('now'))
+                ON CONFLICT(participant, week_of) DO UPDATE SET
+                    goal_days = excluded.goal_days,
+                    updated_at = datetime('now')
+                """,
+                (participant, week_of, goal_days),
+            )
+
+    def get_weekly_goal(self, participant: str, week_of: str) -> int | None:
+        """Return goal_days for participant/week_of, or None if unset."""
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT goal_days FROM weekly_goal
+                WHERE participant = ? AND week_of = ?
+                """,
+                (participant, week_of),
+            ).fetchone()
+            if not row:
+                return None
+            return int(row["goal_days"])
+
+    def count_train_days(
+        self,
+        participant: str,
+        week_start_mon: str,
+        week_end_sun: str,
+    ) -> int:
+        """Count days with trained=1 in [week_start_mon, week_end_sun] (ISO dates).
+
+        Unknown days (no row or trained IS NULL) are not counted — Sunday only if known.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM daily_status
+                WHERE participant = ?
+                  AND date >= ?
+                  AND date <= ?
+                  AND trained = 1
+                """,
+                (participant, week_start_mon, week_end_sun),
+            ).fetchone()
+            return int(row["n"]) if row else 0

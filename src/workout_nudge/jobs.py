@@ -1,4 +1,4 @@
-"""Scheduled jobs: sync (8:00), report (8:30), compare (10:00)."""
+"""Scheduled jobs: sync (8:00), report (8:30), compare (10:00), weekly (Sun 11:00)."""
 
 from __future__ import annotations
 
@@ -27,6 +27,27 @@ def today_ny(cfg: Config) -> date:
 
 def yesterday_ny(cfg: Config) -> date:
     return today_ny(cfg) - timedelta(days=1)
+
+
+def monday_of(d: date) -> date:
+    """Monday of the calendar week containing d (Mon–Sun weeks)."""
+    return d - timedelta(days=d.weekday())
+
+
+def next_monday(d: date) -> date:
+    """Next Monday strictly after d (if d is Monday, returns +7)."""
+    return d + timedelta(days=(7 - d.weekday()))
+
+
+def commitment_week_of(d: date) -> date:
+    """week_of for a weekly commitment reply.
+
+    Sunday (after weekly ask): next Monday. Otherwise: Monday of the current week
+    (the week most recently asked about on the prior Sunday).
+    """
+    if d.weekday() == 6:  # Sunday
+        return d + timedelta(days=1)
+    return monday_of(d)
 
 
 def _score(obj: dict | None, key: str = "score") -> int | None:
@@ -287,6 +308,72 @@ def _send_partner_updates(
         )
 
     store.mark_partner_update_sent(today_s)
+
+
+def weekly(cfg: Config, store: Store | None = None) -> dict:
+    """Sunday ~11:00: recap current Mon–Sun week, ask for next week's commitment."""
+    store = store or Store(cfg.database_path)
+    a, b = cfg.require_participants()
+    today = today_ny(cfg)
+    week_start = monday_of(today)
+    week_end = week_start + timedelta(days=6)  # Sunday
+    week_of = week_start.isoformat()
+    upcoming = next_monday(today)
+    upcoming_s = upcoming.isoformat()
+
+    result: dict = {
+        "day": today.isoformat(),
+        "week_of": week_of,
+        "week_end": week_end.isoformat(),
+        "upcoming_week_of": upcoming_s,
+        "actions": [],
+    }
+
+    # Recipients: A always; B only if opted in
+    recipients: list[tuple[str, str]] = [("A", a)]
+    if store.is_opted_in(b):
+        recipients.append(("B", b))
+
+    # Load goals + actuals
+    stats: dict[str, dict] = {}
+    for label, phone in [("A", a), ("B", b)]:
+        goal = store.get_weekly_goal(phone, week_of)
+        days = store.count_train_days(phone, week_of, week_end.isoformat())
+        stats[label] = {"phone": phone, "goal": goal, "days": days}
+
+    b_opted = store.is_opted_in(b)
+
+    for label, phone in recipients:
+        mine = stats[label]
+        partner_label = "B" if label == "A" else "A"
+        partner = stats[partner_label]
+        include_partner = (label == "A" and b_opted) or (label == "B")
+        # Partner known if they have a goal or any counted train days / we always
+        # have a day count (may be 0). For A→B: include if B opted in.
+        # For B→A: always include A's stats.
+        body = sms.msg_weekly_recap(
+            my_days=mine["days"],
+            my_goal=mine["goal"],
+            partner_days=partner["days"] if include_partner else None,
+            partner_goal=partner["goal"] if include_partner else None,
+            include_partner=include_partner,
+        )
+        sms.send_sms(cfg, phone, body)
+        result["actions"].append(
+            {
+                "to": label,
+                "kind": "weekly_recap",
+                "days": mine["days"],
+                "goal": mine["goal"],
+            }
+        )
+
+    for label, phone in recipients:
+        sms.send_sms(cfg, phone, sms.msg_weekly_ask())
+        result["actions"].append({"to": label, "kind": "weekly_ask", "week_of": upcoming_s})
+
+    log.info("weekly complete: %s", result)
+    return result
 
 
 def maybe_send_partner_update_after_inbound(

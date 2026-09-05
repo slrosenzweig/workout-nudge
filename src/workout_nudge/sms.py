@@ -195,3 +195,59 @@ def msg_partner_comparison(partner_trained: bool) -> str:
 
 def msg_partner_no_answer() -> str:
     return msg_partner_no_update()
+
+
+def msg_weekly_recap(
+    *,
+    my_days: int,
+    my_goal: int | None,
+    partner_days: int | None = None,
+    partner_goal: int | None = None,
+    include_partner: bool = False,
+) -> str:
+    """Sunday recap: your days vs goal, and partner's if known."""
+    if my_goal is None:
+        mine = f"you trained {my_days} day{'s' if my_days != 1 else ''} — no goal set"
+    elif my_days >= my_goal:
+        mine = f"you trained {my_days}/{my_goal} days — goal met"
+    else:
+        mine = f"you trained {my_days}/{my_goal} days — missed"
+
+    parts = [f"{BRAND}: This week {mine}."]
+    if include_partner:
+        if partner_goal is None and partner_days is None:
+            parts.append("Partner: no update.")
+        elif partner_goal is None:
+            pd = partner_days if partner_days is not None else 0
+            parts.append(
+                f"Partner trained {pd} day{'s' if pd != 1 else ''} (no goal)."
+            )
+        else:
+            pd = partner_days if partner_days is not None else 0
+            if pd >= partner_goal:
+                parts.append(f"Partner: {pd}/{partner_goal} — met.")
+            else:
+                parts.append(f"Partner: {pd}/{partner_goal} — missed.")
+    parts.append("Reply STOP to opt out.")
+    return " ".join(parts)
+
+
+def msg_weekly_ask() -> str:
+    return (
+        f"{BRAND}: New week — how many days will you commit to working out "
+        "(Mon–Sun)? Reply with a number 0–7. Reply STOP to opt out."
+    )
+
+
+def msg_weekly_locked(n: int) -> str:
+    return (
+        f"{BRAND}: Locked in — {n} day{'s' if n != 1 else ''} this week. "
+        "Reply STOP to opt out."
+    )
+
+
+def msg_weekly_partner_commit(my_n: int, their_n: int) -> str:
+    return (
+        f"{BRAND}: You’re in for {my_n}; your partner committed to {their_n} "
+        "this week. Reply STOP to opt out."
+    )
