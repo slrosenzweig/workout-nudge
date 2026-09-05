@@ -1,4 +1,4 @@
-"""CLI: sync | report | compare | serve (nudge → report)."""
+"""CLI: sync | report | compare | weekly | serve (nudge → report)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 import logging
 
 from workout_nudge.config import Config, load_dotenv
-from workout_nudge.jobs import compare, report, sync
+from workout_nudge.jobs import compare, report, sync, weekly
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -18,7 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "command",
-        choices=["sync", "report", "compare", "serve", "nudge"],
+        choices=["sync", "report", "compare", "weekly", "serve", "nudge"],
         help="Job to run (nudge is a deprecated alias for report)",
     )
     parser.add_argument(
@@ -46,6 +46,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "compare":
         result = compare(cfg)
+        print(json.dumps(result, indent=2, default=str))
+        return 0
+    if args.command == "weekly":
+        result = weekly(cfg)
         print(json.dumps(result, indent=2, default=str))
         return 0
     if args.command == "serve":

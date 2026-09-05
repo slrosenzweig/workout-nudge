@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from flask import Flask, Request, Response, request
 
 from workout_nudge import jobs, sms
-from workout_nudge.parse import Intent, parse_intent
+from workout_nudge.parse import Intent, parse_message
 from workout_nudge.store import Store
 
 if TYPE_CHECKING:
@@ -62,11 +62,13 @@ def handle_inbound(cfg: Config, store: Store, req: Request) -> Response:
         log.info("Ignoring SMS from unknown number")
         return _twiml("")
 
-    intent = parse_intent(body)
+    parsed = parse_message(body)
+    intent = parsed.intent
     tz = ZoneInfo(cfg.tz)
     now = datetime.now(tz)
-    today = now.date().isoformat()
-    yesterday = (now.date() - timedelta(days=1)).isoformat()
+    today_d = now.date()
+    today = today_d.isoformat()
+    yesterday = (today_d - timedelta(days=1)).isoformat()
 
     reply = ""
 
@@ -118,6 +120,24 @@ def handle_inbound(cfg: Config, store: Store, req: Request) -> Response:
             reply = ""
         else:
             reply = sms.msg_got_it()
+        return _twiml(reply)
+
+    if intent is Intent.WEEKLY_COMMIT:
+        days = parsed.days
+        if days is None or days < 0 or days > 7:
+            return _twiml("")
+        if from_num == b:
+            store.set_opt_in(from_num, True)
+        week_of = jobs.commitment_week_of(today_d).isoformat()
+        store.set_weekly_goal(from_num, week_of, days)
+        reply = sms.msg_weekly_locked(days)
+        goal_a = store.get_weekly_goal(a, week_of) if a else None
+        goal_b = store.get_weekly_goal(b, week_of) if b else None
+        if goal_a is not None and goal_b is not None:
+            # SMS each the other's commitment (Winter Rose partner commit)
+            sms.send_sms(cfg, a, sms.msg_weekly_partner_commit(goal_a, goal_b))
+            if store.is_opted_in(b) or from_num == b:
+                sms.send_sms(cfg, b, sms.msg_weekly_partner_commit(goal_b, goal_a))
         return _twiml(reply)
 
     return _twiml("")

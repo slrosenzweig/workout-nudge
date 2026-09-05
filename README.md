@@ -66,6 +66,7 @@ Prints JSON: `day`, `yesterday`, `readiness`, `sleep`, `activity`, `yesterday_wo
 python -m workout_nudge sync     # 8:00 — remind A to sync Oura ring
 python -m workout_nudge report   # 8:30 — scores, today intent, yesterday ask
 python -m workout_nudge compare  # 10:00 — partner update or reminders
+python -m workout_nudge weekly   # Sunday 11:00 — week recap + next-week commitment ask
 python -m workout_nudge serve    # Twilio inbound webhook
 ```
 
@@ -94,6 +95,16 @@ Example: `Winter Rose: Good morning — open Oura and sync your ring so we can p
 
 Partner example: `Winter Rose: Your partner trained yesterday and plans to rest today. Reply STOP to opt out.`
 
+
+### Sunday 11:00 job (`weekly`)
+
+Goal week = Monday–Sunday (America/New_York). Store key `week_of` = that Monday’s ISO date.
+
+1. Recap the week ending today (Sunday): for A (and B if opted in), SMS days trained vs goal (met / missed / no goal), and partner’s if known.
+2. Ask each for next week’s commitment (0–7 days, Mon–Sun). Example: `Winter Rose: New week — how many days will you commit to working out (Mon–Sun)? Reply with a number 0–7. Reply STOP to opt out.`
+3. Inbound replies like `4`, `4 days`, `I'll do 5`, or `commit 3` lock the goal for the upcoming (or most recently asked) `week_of`. Confirm: `Winter Rose: Locked in — N days this week. Reply STOP to opt out.`
+4. When both A and B have goals for that `week_of`, SMS each the other’s commitment.
+
 ### Inbound webhook
 
 `POST /webhooks/twilio/sms` — Twilio form params `From`, `To`, `Body`.
@@ -104,6 +115,7 @@ Validates `X-Twilio-Signature` when `TWILIO_AUTH_TOKEN` is set.
 - `STOP` / `CANCEL` / … → opt out
 - `YES` / `NO` (and variants) → yesterday workout status
 - `TRAIN` / `REST` (and variants, e.g. `train day`, `rest day`) → today intent
+- Lone `0`–`7`, `N days`, `I'll do N`, `commit N` → weekly commitment for the upcoming / most recently asked week
 - Late path: if both complete, local time ≥ 10:00 America/New_York, and partner update not sent → send partner updates
 
 Point Twilio’s messaging webhook at your public HTTPS URL ending in `/webhooks/twilio/sms`.
@@ -115,9 +127,10 @@ CRON_TZ=America/New_York
 0 8 * * * cd /path/to/workout-nudge && .venv/bin/python -m workout_nudge sync
 30 8 * * * cd /path/to/workout-nudge && .venv/bin/python -m workout_nudge report
 0 10 * * * cd /path/to/workout-nudge && .venv/bin/python -m workout_nudge compare
+0 11 * * 0 cd /path/to/workout-nudge && .venv/bin/python -m workout_nudge weekly
 ```
 
-Keep `serve` running under systemd/supervisor (or a process manager) for inbound SMS (including late TRAIN/REST / YES/NO replies).
+Keep `serve` running under systemd/supervisor (or a process manager) for inbound SMS (including late TRAIN/REST / YES/NO replies and weekly commitment numbers).
 
 ## Workout qualification (locked)
 
