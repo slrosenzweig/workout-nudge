@@ -47,16 +47,16 @@ def test_rest_variants():
 
 
 def test_sms_brand_sarah():
-    assert sms.msg_sync_ring().startswith("Sarah:")
-    assert sms.msg_ask_yesterday().startswith("Sarah:")
-    assert sms.msg_ask_b().startswith("Sarah:")
+    assert sms.msg_sync_ring().startswith("Winter Rose:")
+    assert sms.msg_ask_yesterday().startswith("Winter Rose:")
+    assert sms.msg_ask_b().startswith("Winter Rose:")
     assert sms.msg_partner_update(
         partner_trained_yesterday=True, partner_today_intent="rest"
-    ).startswith("Sarah:")
+    ).startswith("Winter Rose:")
     assert "trained yesterday" in sms.msg_partner_update(
         partner_trained_yesterday=True, partner_today_intent="rest"
     )
     assert "plans to rest today" in sms.msg_partner_update(
         partner_trained_yesterday=True, partner_today_intent="rest"
     )
-    assert "Winter Rose" not in sms.msg_sync_ring()
+    assert sms.msg_sync_ring().startswith("Winter Rose:")

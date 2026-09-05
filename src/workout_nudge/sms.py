@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-BRAND = "Sarah"
+BRAND = "Winter Rose"
 
 
 def send_sms(cfg: Config, to: str, body: str) -> dict:
@@ -76,7 +76,7 @@ def validate_twilio_signature(
     return hmac.compare_digest(expected, signature)
 
 
-# --- Message templates (Sarah branded) ---
+# --- Message templates (Winter Rose branded) ---
 
 
 def msg_sync_ring() -> str:

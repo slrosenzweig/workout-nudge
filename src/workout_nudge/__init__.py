@@ -1,3 +1,3 @@
-"""Sarah daily workout accountability SMS."""
+"""Winter Rose daily workout accountability SMS."""
 
 __version__ = "1.0.0"

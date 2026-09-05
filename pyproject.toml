@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "workout-nudge"
 version = "1.0.0"
-description = "Sarah daily workout accountability SMS"
+description = "Winter Rose daily workout accountability SMS"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

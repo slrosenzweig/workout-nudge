@@ -1,10 +1,10 @@
-# workout-nudge (SMS brand: Sarah)
+# workout-nudge (SMS brand: Winter Rose)
 
 Daily workout accountability SMS for two participants (America/New_York, 7 days a week).
 
 Participant A has an Oura Ring. Participant B is SMS-only after `START` opt-in.
 
-User-facing SMS are prefixed with **Sarah:**.
+User-facing SMS are prefixed with **Winter Rose:**. Address the person running the service as Sarah in chat; Winter Rose is the SMS brand only.
 
 **Do not commit secrets, real phone numbers, Twilio SIDs, or Oura tokens.**
 
@@ -75,7 +75,7 @@ python -m workout_nudge serve    # Twilio inbound webhook
 
 SMS participant A only: open Oura and sync the ring. No scores.
 
-Example: `Sarah: Good morning — open Oura and sync your ring so we can pull today’s scores. Reply STOP to opt out.`
+Example: `Winter Rose: Good morning — open Oura and sync your ring so we can pull today’s scores. Reply STOP to opt out.`
 
 ### 8:30 job (`report`)
 
@@ -92,7 +92,7 @@ Example: `Sarah: Good morning — open Oura and sync your ring so we can pull to
 - Else remind incomplete participants; tell the complete person the other hasn’t updated.
 - Idempotent if partner update already sent.
 
-Partner example: `Sarah: Your partner trained yesterday and plans to rest today. Reply STOP to opt out.`
+Partner example: `Winter Rose: Your partner trained yesterday and plans to rest today. Reply STOP to opt out.`
 
 ### Inbound webhook
 
