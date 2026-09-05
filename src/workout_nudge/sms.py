@@ -11,12 +11,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from workout_nudge.config import Config
 
 log = logging.getLogger(__name__)
+
+BRAND = "Sarah"
 
 
 def send_sms(cfg: Config, to: str, body: str) -> dict:
@@ -63,7 +64,6 @@ def validate_twilio_signature(
     """Validate X-Twilio-Signature (HMAC-SHA1 of url + sorted params)."""
     if not signature:
         return False
-    # Twilio: concatenate URL + param keys sorted alphabetically with values
     s = url
     for key in sorted(params.keys()):
         s += key + params[key]
@@ -76,48 +76,122 @@ def validate_twilio_signature(
     return hmac.compare_digest(expected, signature)
 
 
-# --- Message templates (Winter Rose branded) ---
+# --- Message templates (Sarah branded) ---
 
-def msg_train(readiness_score: int) -> str:
+
+def msg_sync_ring() -> str:
     return (
-        f"Winter Rose: Recovery looks good today (readiness {readiness_score}). "
-        "Should we train this morning? Reply STOP to opt out."
+        f"{BRAND}: Good morning — open Oura and sync your ring so we can pull "
+        "today’s scores. Reply STOP to opt out."
     )
 
 
-def msg_rest() -> str:
-    return "Winter Rose: Recovery is low today. Rest day. Reply STOP to opt out."
+def msg_report_a(
+    *,
+    readiness_score: int | None,
+    activity_score: int | None,
+    today_intent: str,
+    yesterday_trained: bool | None,
+    ask_yesterday: bool,
+) -> str:
+    """One report SMS for participant A."""
+    r = str(readiness_score) if readiness_score is not None else "n/a"
+    a = str(activity_score) if activity_score is not None else "n/a"
+    intent_word = "train" if today_intent == "train" else "rest"
+    parts = [
+        f"{BRAND}: Readiness {r}, activity {a}. Today: {intent_word}.",
+    ]
+    if ask_yesterday:
+        parts.append("Did you work out yesterday? Reply YES or NO.")
+    elif yesterday_trained is True:
+        parts.append("Yesterday: trained.")
+    elif yesterday_trained is False:
+        parts.append("Yesterday: rest.")
+    parts.append("Reply STOP to opt out.")
+    return " ".join(parts)
+
+
+def msg_ask_b() -> str:
+    """Ask B for yesterday YES/NO and today TRAIN/REST."""
+    return (
+        f"{BRAND}: Did you work out yesterday? Reply YES or NO. "
+        "For today, reply TRAIN or REST. Reply STOP to opt out."
+    )
 
 
 def msg_ask_yesterday() -> str:
     return (
-        "Winter Rose: Did you work out yesterday? Reply YES or NO. "
+        f"{BRAND}: Did you work out yesterday? Reply YES or NO. "
         "Reply STOP to opt out."
     )
 
 
-def msg_partner_comparison(partner_trained: bool) -> str:
-    did = "did" if partner_trained else "did not"
+def msg_ask_today_intent() -> str:
     return (
-        f"Winter Rose: Your partner {did} train yesterday. "
+        f"{BRAND}: For today, reply TRAIN or REST. Reply STOP to opt out."
+    )
+
+
+def msg_ask_incomplete(*, need_yesterday: bool, need_intent: bool) -> str:
+    bits: list[str] = []
+    if need_yesterday:
+        bits.append("Did you work out yesterday? Reply YES or NO.")
+    if need_intent:
+        bits.append("For today, reply TRAIN or REST.")
+    if not bits:
+        return f"{BRAND}: Got it."
+    return f"{BRAND}: {' '.join(bits)} Reply STOP to opt out."
+
+
+def msg_partner_update(
+    *,
+    partner_trained_yesterday: bool,
+    partner_today_intent: str,
+) -> str:
+    y = "trained" if partner_trained_yesterday else "rested"
+    t = "train" if partner_today_intent == "train" else "rest"
+    return (
+        f"{BRAND}: Your partner {y} yesterday and plans to {t} today. "
         "Reply STOP to opt out."
+    )
+
+
+def msg_partner_no_update() -> str:
+    return (
+        f"{BRAND}: Your partner hasn’t updated yet. Reply STOP to opt out."
     )
 
 
 def msg_got_it() -> str:
-    return "Winter Rose: Got it."
-
-
-def msg_partner_no_answer() -> str:
-    return (
-        "Winter Rose: Your partner hasn't answered yet about yesterday. "
-        "Reply STOP to opt out."
-    )
+    return f"{BRAND}: Got it."
 
 
 def msg_opt_out_confirm() -> str:
-    return "Winter Rose: You are opted out. Reply START to opt back in."
+    return f"{BRAND}: You are opted out. Reply START to opt back in."
 
 
 def msg_opt_in_confirm() -> str:
-    return "Winter Rose: You are opted in. Reply STOP to opt out."
+    return f"{BRAND}: You are opted in. Reply STOP to opt out."
+
+
+# Deprecated aliases kept for any leftover callers
+def msg_train(readiness_score: int) -> str:
+    return (
+        f"{BRAND}: Recovery looks good today (readiness {readiness_score}). "
+        "Today: train. Reply STOP to opt out."
+    )
+
+
+def msg_rest() -> str:
+    return f"{BRAND}: Recovery is low today. Today: rest. Reply STOP to opt out."
+
+
+def msg_partner_comparison(partner_trained: bool) -> str:
+    return msg_partner_update(
+        partner_trained_yesterday=partner_trained,
+        partner_today_intent="rest",
+    )
+
+
+def msg_partner_no_answer() -> str:
+    return msg_partner_no_update()

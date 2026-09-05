@@ -44,9 +44,7 @@ def handle_inbound(cfg: Config, store: Store, req: Request) -> Response:
     # Validate signature when auth token set
     if cfg.twilio_auth_token:
         sig = req.headers.get("X-Twilio-Signature")
-        # Prefer configured public URL if behind proxy — use request url
         url = req.url
-        # Twilio may use https while Flask sees http behind proxy
         fwd_proto = req.headers.get("X-Forwarded-Proto")
         if fwd_proto and url.startswith("http://"):
             url = "https://" + url[len("http://") :]
@@ -66,8 +64,9 @@ def handle_inbound(cfg: Config, store: Store, req: Request) -> Response:
 
     intent = parse_intent(body)
     tz = ZoneInfo(cfg.tz)
-    # Yesterday relative to America/New_York when the ask was for yesterday
-    yesterday = (datetime.now(tz).date() - timedelta(days=1)).isoformat()
+    now = datetime.now(tz)
+    today = now.date().isoformat()
+    yesterday = (now.date() - timedelta(days=1)).isoformat()
 
     reply = ""
 
@@ -82,12 +81,10 @@ def handle_inbound(cfg: Config, store: Store, req: Request) -> Response:
         return _twiml(reply)
 
     if intent is Intent.WORKOUT_YES:
-        # YES from known number: opt in if B (engagement), and record workout
         if from_num == b:
             store.set_opt_in(from_num, True)
         store.set_status(yesterday, from_num, True, source="sms")
-        if jobs.maybe_send_comparison_after_inbound(cfg, store, yesterday):
-            # Comparison SMS already sent via API; empty TwiML
+        if jobs.maybe_send_partner_update_after_inbound(cfg, store):
             reply = ""
         else:
             reply = sms.msg_got_it()
@@ -97,7 +94,27 @@ def handle_inbound(cfg: Config, store: Store, req: Request) -> Response:
         if from_num == b:
             store.set_opt_in(from_num, True)
         store.set_status(yesterday, from_num, False, source="sms")
-        if jobs.maybe_send_comparison_after_inbound(cfg, store, yesterday):
+        if jobs.maybe_send_partner_update_after_inbound(cfg, store):
+            reply = ""
+        else:
+            reply = sms.msg_got_it()
+        return _twiml(reply)
+
+    if intent is Intent.TODAY_TRAIN:
+        if from_num == b:
+            store.set_opt_in(from_num, True)
+        store.set_today_intent(today, from_num, "train")
+        if jobs.maybe_send_partner_update_after_inbound(cfg, store):
+            reply = ""
+        else:
+            reply = sms.msg_got_it()
+        return _twiml(reply)
+
+    if intent is Intent.TODAY_REST:
+        if from_num == b:
+            store.set_opt_in(from_num, True)
+        store.set_today_intent(today, from_num, "rest")
+        if jobs.maybe_send_partner_update_after_inbound(cfg, store):
             reply = ""
         else:
             reply = sms.msg_got_it()
@@ -110,7 +127,6 @@ def _twiml(message: str, status: int = 200) -> Response:
     if not message:
         xml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
     else:
-        # Escape minimal XML
         safe = (
             message.replace("&", "&amp;")
             .replace("<", "&lt;")
