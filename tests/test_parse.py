@@ -82,19 +82,19 @@ def test_weekly_does_not_steal_keywords():
     assert parse_intent("n") is Intent.WORKOUT_NO
 
 
-def test_sms_brand_winter_rose():
-    assert sms.BRAND == "Winter Rose"
-    assert sms.msg_sync_ring().startswith("Winter Rose:")
-    assert sms.msg_ask_yesterday().startswith("Winter Rose:")
-    assert sms.msg_ask_b().startswith("Winter Rose:")
-    assert sms.msg_weekly_ask().startswith("Winter Rose:")
-    assert sms.msg_weekly_locked(4).startswith("Winter Rose:")
+def test_sms_brand():
+    assert sms.BRAND == "Frank the Trainer"
+    assert sms.msg_sync_ring().startswith("Frank the Trainer:")
+    assert sms.msg_ask_yesterday().startswith("Frank the Trainer:")
+    assert sms.msg_ask_b().startswith("Frank the Trainer:")
+    assert sms.msg_weekly_ask().startswith("Frank the Trainer:")
+    assert sms.msg_weekly_locked(4).startswith("Frank the Trainer:")
     assert "4 days" in sms.msg_weekly_locked(4)
-    assert sms.msg_weekly_partner_commit(3, 5).startswith("Winter Rose:")
-    assert sms.msg_weekly_recap(my_days=3, my_goal=5).startswith("Winter Rose:")
+    assert sms.msg_weekly_partner_commit(3, 5).startswith("Frank the Trainer:")
+    assert sms.msg_weekly_recap(my_days=3, my_goal=5).startswith("Frank the Trainer:")
     assert sms.msg_partner_update(
         partner_trained_yesterday=True, partner_today_intent="rest"
-    ).startswith("Winter Rose:")
+    ).startswith("Frank the Trainer:")
     assert "trained yesterday" in sms.msg_partner_update(
         partner_trained_yesterday=True, partner_today_intent="rest"
     )

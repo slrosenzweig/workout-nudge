@@ -134,7 +134,7 @@ def handle_inbound(cfg: Config, store: Store, req: Request) -> Response:
         goal_a = store.get_weekly_goal(a, week_of) if a else None
         goal_b = store.get_weekly_goal(b, week_of) if b else None
         if goal_a is not None and goal_b is not None:
-            # SMS each the other's commitment (Winter Rose partner commit)
+            # SMS each the other's commitment (partner commit)
             sms.send_sms(cfg, a, sms.msg_weekly_partner_commit(goal_a, goal_b))
             if store.is_opted_in(b) or from_num == b:
                 sms.send_sms(cfg, b, sms.msg_weekly_partner_commit(goal_b, goal_a))

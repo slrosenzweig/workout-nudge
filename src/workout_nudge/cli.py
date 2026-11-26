@@ -14,7 +14,7 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     parser = argparse.ArgumentParser(
         prog="workout-nudge",
-        description="Winter Rose daily workout accountability SMS",
+        description="Frank the Trainer daily workout accountability SMS",
     )
     parser.add_argument(
         "command",
