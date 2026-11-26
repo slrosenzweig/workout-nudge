@@ -35,6 +35,8 @@ See `.env.example` (loaded by `src/workout_nudge/config.py`):
 | `TZ` | `America/New_York` |
 | `DATABASE_PATH` | SQLite path |
 | `WEBHOOK_HOST` / `WEBHOOK_PORT` | Inbound SMS server |
+| `SURPRISE_P_A` / `SURPRISE_P_B` | Optional surprise-text roll odds (default `0.30` / `0.15`) |
+| `INBOUND_WEBHOOK_URL` / `INBOUND_WEBHOOK_KEY` | Twilio Function relay only (see `relay/`) |
 
 ## Oura OAuth
 
@@ -52,27 +54,37 @@ This prints the authorize URL (and tries to open a browser), catches the localho
 
 **Refresh tokens are single-use.** The client always persists the new `refresh_token` after each refresh.
 
-Inspect a day:
+Inspect a day (optional `YYYY-MM-DD` argument; default is today in `TZ`):
 
 ```bash
 python scripts/fetch_day.py
+python scripts/fetch_day.py 2026-11-26
 ```
 
-Prints JSON: `day`, `yesterday`, `readiness`, `sleep`, `activity`, `yesterday_workouts`, `yesterday_trained`, `yesterday_qualifying`.
+Prints JSON: `day`, `yesterday`, `readiness`, `sleep`, `activity`, `yesterday_workouts`, `yesterday_trained`, `yesterday_qualifying` (qualifying workouts include minutes, source, intensity, and label). Token paths come from `OURA_TOKENS_PATH`.
+
+List workouts in a range:
+
+```bash
+python scripts/fetch_workouts.py
+python scripts/fetch_workouts.py 2026-11-01 2026-11-30
+```
 
 ## CLI
 
 ```bash
-python -m workout_nudge sync     # 8:00 — remind A to sync Oura ring
-python -m workout_nudge report   # 8:30 — scores, today intent, yesterday ask
-python -m workout_nudge compare  # 10:00 — partner update or reminders
-python -m workout_nudge weekly   # Sunday 11:00 — week recap + next-week commitment ask
-python -m workout_nudge serve    # Twilio inbound webhook
+python -m workout_nudge sync      # 8:00 — remind A to sync Oura ring
+python -m workout_nudge report    # 8:30 — scores, today intent, yesterday ask; Mondays include last week’s scoreboard
+python -m workout_nudge compare   # 10:00 — partner update or reminders
+python -m workout_nudge weekly    # Sunday 11:00 — week recap + next-week commitment ask
+python -m workout_nudge poll      # reply-poll backup (see cron)
+python -m workout_nudge surprise  # occasional cheer / nudge (see cron)
+python -m workout_nudge serve     # Twilio inbound webhook
 ```
 
-`nudge` is a deprecated alias for `report`.
+`nudge` is a deprecated alias for `report`. `python scripts/send_weekly.py` is the same as `weekly` and reads numbers / Messaging Service SID from `.env`.
 
-Jobs are implemented in `src/workout_nudge/jobs.py` and wired in `src/workout_nudge/cli.py`.
+Jobs live in `src/workout_nudge/jobs.py`, `src/workout_nudge/inbound.py`, and `src/workout_nudge/surprise.py`, wired in `src/workout_nudge/cli.py`.
 
 ## Daily and weekly flow
 
@@ -90,8 +102,9 @@ Example: `Frank the Trainer: Good morning — open Oura and sync your ring so we
 2. `today_intent`: train if readiness ≥ 70 and sleep looks solid; else rest. Save in the store.
 3. Yesterday: if any workout qualifies → record A=yes (no ask). Else SMS YES/NO ask (included in A’s report).
 4. SMS A one report: readiness/activity, today intent, yesterday train/rest (or ask).
-5. If B opted in: SMS asking YES/NO for yesterday and/or TRAIN/REST for today, only for fields that are still unknown.
-6. Does **not** send partner comparison.
+5. **Mondays only:** also include the closed week’s scoreboard (the Mon–Sun week that ended yesterday): days trained vs `weekly_goal` (met / missed / no goal). Never on Sunday.
+6. If B opted in: SMS asking YES/NO for yesterday and/or TRAIN/REST for today, only for fields that are still unknown.
+7. Does **not** send partner comparison.
 
 ### 10:00 job (`compare`)
 
@@ -112,7 +125,7 @@ A Sunday reply is stored as the **next** Monday’s week. A reply on Monday–Sa
 
 ### Inbound webhook
 
-`POST /webhooks/twilio/sms` — Twilio form params `From`, `To`, `Body`. Implemented in `src/workout_nudge/webhook.py`. Parsing lives in `src/workout_nudge/parse.py`.
+`POST /webhooks/twilio/sms` — Twilio form params `From`, `To`, `Body`, `MessageSid`. Implemented in `src/workout_nudge/webhook.py`. Shared apply logic lives in `src/workout_nudge/inbound.py`. Parsing lives in `src/workout_nudge/parse.py`.
 
 Validates `X-Twilio-Signature` when `TWILIO_AUTH_TOKEN` is set.
 
@@ -122,8 +135,29 @@ Validates `X-Twilio-Signature` when `TWILIO_AUTH_TOKEN` is set.
 - `TRAIN` / `REST` (and variants, e.g. `train day`, `rest day`) → today intent
 - Lone `0`–`7`, `N days`, `I'll do N`, `commit N` → weekly commitment for the upcoming / most recently asked week
 - Late path: if both complete, local time ≥ 10:00 in `TZ`, and partner update not sent → send partner updates
+- `MessageSid` is recorded in `processed_inbound` so the poll backup will not confirm twice
 
-Point Twilio’s messaging webhook at your public HTTPS URL ending in `/webhooks/twilio/sms`.
+Point Twilio’s messaging webhook at your public HTTPS URL ending in `/webhooks/twilio/sms`, or use the optional [relay](#inbound-sms-relay) if you need a Twilio Function in front.
+
+### Reply-poll backup (`poll`)
+
+If the inbound webhook is missed, `python -m workout_nudge poll` lists Twilio inbound messages since `last_poll_at` (stored in SQLite `meta`) and applies the same handler. Already-processed `MessageSid` values are skipped. A confirm SMS is sent only when the webhook has not already confirmed that message.
+
+Suggested schedule: :27 and :57, 8 AM–10 PM in `TZ`.
+
+### Surprise texts (`surprise`)
+
+Occasional extra texts, checked around noon and 5 PM. The job rolls the dice (`SURPRISE_P_A` ≈ 30% for A, `SURPRISE_P_B` ≈ 15% for B) and only sends when a hook applies:
+
+- A: hit the weekly goal, one workout away, a streak of 3+ trained days, or falling behind (needed days ≥ days left − 1, or zero train days midweek).
+- B (if opted in): cheer reported progress, or a playful quiet invite if nothing is logged. Texts never include the other person’s details.
+
+Caps and quiet hours (all in `src/workout_nudge/surprise.py`, recorded in `surprise_sent`):
+
+- A: at most 3 per Mon–Sun week, never on back-to-back days.
+- B: at most 1 per week.
+- No sends between 9 PM and 9 AM local.
+- Every text uses the Frank the Trainer prefix and `Reply STOP to opt out.`
 
 ## Cron (America/New_York)
 
@@ -133,19 +167,17 @@ CRON_TZ=America/New_York
 30 8 * * * cd /path/to/workout-nudge && .venv/bin/python -m workout_nudge report
 0 10 * * * cd /path/to/workout-nudge && .venv/bin/python -m workout_nudge compare
 0 11 * * 0 cd /path/to/workout-nudge && .venv/bin/python -m workout_nudge weekly
+27,57 8-21 * * * cd /path/to/workout-nudge && .venv/bin/python -m workout_nudge poll
+0 12,17 * * * cd /path/to/workout-nudge && .venv/bin/python -m workout_nudge surprise
 ```
 
-Keep `serve` running under systemd/supervisor (or a process manager) for inbound SMS (including late TRAIN/REST / YES/NO replies and weekly commitment numbers).
+Keep `serve` running under systemd/supervisor (or a process manager) for inbound SMS (including late TRAIN/REST / YES/NO replies and weekly commitment numbers). The poll cron is a backup, not a replacement for `serve`.
 
-## What lives outside this repo
+## Inbound SMS relay
 
-The original deployment also uses hosted routines and helper scripts that are **not** in this package. They are documented here so a self-hosted copy is not mistaken for that setup:
+`relay/` is an optional Twilio Function that forwards inbound SMS as JSON to your webhook. URLs and keys come from Function environment variables (`INBOUND_WEBHOOK_URL`, `INBOUND_WEBHOOK_KEY`) — nothing is hardcoded. See `relay/README.md` for deploy steps.
 
-- **Conditional 8:00 sync.** The live sync routine can skip the SMS when today’s Oura readiness is already present. `python -m workout_nudge sync` always sends.
-- **Monday scoreboard.** The live 8:30 report can include the closed week’s goal result on Mondays. The `report` job in this repo does not.
-- **Reply-poll backup.** A hosted poller at :27 and :57, 8 AM–10 PM, can pick up inbound texts if the webhook is missed. It dedupes with `sms_sent` flags and `processed_inbound_sids`. Those flags and the poller are not in this codebase. This repo’s compare/weekly idempotency uses the SQLite `partner_update_sent` and `weekly_goal` tables instead.
-- **Personalized copy.** Live texts are often written to name real workouts and weekly progress. The templates in `src/workout_nudge/sms.py` are the generic versions.
-- **Standalone Oura helper and SMS relay.** A local Oura fetch script and a small Twilio Function that forwards inbound SMS to a hosted webhook may run beside this repo. Do not commit tokens, auth keys, or phone numbers from those helpers.
+If you run `python -m workout_nudge serve` on a public HTTPS URL, you can point Twilio at `/webhooks/twilio/sms` and skip the relay.
 
 ## Workout qualification
 
@@ -159,12 +191,17 @@ See `src/workout_nudge/rules.py` — `qualifies_workout`. Manual Oura entries al
 | Train/rest score cutoffs | `src/workout_nudge/rules.py` — `should_train` (readiness ≥ 70 **and** solid sleep) and `sleep_looks_solid` (sleep score ≥ 70) |
 | What counts as a workout | `src/workout_nudge/rules.py` — `qualifies_workout` |
 | Job behavior (sync / report / compare / weekly) | `src/workout_nudge/jobs.py` |
+| Reply-poll backup | `src/workout_nudge/inbound.py` — `poll` |
+| Surprise hooks, caps, quiet hours, odds | `src/workout_nudge/surprise.py`; odds also via `SURPRISE_P_A` / `SURPRISE_P_B` |
 | Schedule | The cron block above; CLI entry points in `src/workout_nudge/cli.py` |
 | Participants, Twilio, Oura, timezone, database, webhook bind | `.env` (start from `.env.example`); loaded in `src/workout_nudge/config.py` |
 | Inbound reply phrases | `src/workout_nudge/parse.py` |
-| How inbound SMS is handled | `src/workout_nudge/webhook.py` |
+| How inbound SMS is handled | `src/workout_nudge/inbound.py` and `src/workout_nudge/webhook.py` |
+| Twilio Function relay | `relay/functions/inbound.js` and `relay/README.md` |
 
 After edits, run the tests (see below).
+
+A hosted deployment may still write more personalized copy than the templates in `sms.py`; the templates are what this package sends.
 
 ## Tests
 
@@ -174,13 +211,14 @@ From the repo root, with the dev extra installed (`pip install -e ".[dev]"`):
 pytest
 ```
 
-Tests live in `tests/test_parse.py`, `tests/test_rules.py`, and `tests/test_store_weekly.py`. Pytest is configured in `pyproject.toml` (`testpaths = tests`, `pythonpath = src`).
+Tests live in `tests/`. Pytest is configured in `pyproject.toml` (`testpaths = tests`, `pythonpath = src`).
 
 ## Layout
 
 ```
 src/workout_nudge/   # package
-scripts/             # oauth_login.py, fetch_day.py
+scripts/             # oauth_login.py, fetch_day.py, fetch_workouts.py, send_weekly.py
+relay/               # optional Twilio Function
 tests/
 .env.example
 ```

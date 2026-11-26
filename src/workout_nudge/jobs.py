@@ -72,12 +72,34 @@ def sync(cfg: Config, store: Store | None = None) -> dict:
     return result
 
 
-def report(cfg: Config, store: Store | None = None) -> dict:
-    """8:30 job: Oura fetch, today intent, yesterday status, SMS report (no partner)."""
+def closed_week_scoreboard(store: Store, participant: str, today: date) -> str | None:
+    """Monday-only fragment for the week that ended yesterday (Mon–Sun)."""
+    if today.weekday() != 0:
+        return None
+    closed_start = today - timedelta(days=7)
+    closed_end = today - timedelta(days=1)
+    days = store.count_train_days(
+        participant, closed_start.isoformat(), closed_end.isoformat()
+    )
+    goal = store.get_weekly_goal(participant, closed_start.isoformat())
+    return sms.scoreboard_fragment(days, goal)
+
+
+def report(
+    cfg: Config,
+    store: Store | None = None,
+    *,
+    today: date | None = None,
+    oura_bundle: dict | None = None,
+) -> dict:
+    """8:30 job: Oura fetch, today intent, yesterday status, SMS report (no partner).
+
+    On Mondays the SMS also includes the closed week’s goal scoreboard.
+    """
     store = store or Store(cfg.database_path)
     a, b = cfg.require_participants()
-    today = today_ny(cfg)
-    yesterday = yesterday_ny(cfg)
+    today = today or today_ny(cfg)
+    yesterday = today - timedelta(days=1)
     today_s = today.isoformat()
     yesterday_s = yesterday.isoformat()
     result: dict = {
@@ -87,17 +109,20 @@ def report(cfg: Config, store: Store | None = None) -> dict:
         "actions": [],
     }
 
-    if not cfg.oura_client_id or not cfg.oura_client_secret:
+    if oura_bundle is None and (not cfg.oura_client_id or not cfg.oura_client_secret):
         raise RuntimeError(
             "OURA_CLIENT_ID and OURA_CLIENT_SECRET required for report"
         )
 
-    client = oura_mod.OuraClient(
-        client_id=cfg.oura_client_id,
-        client_secret=cfg.oura_client_secret,
-        tokens_path=cfg.oura_tokens_path,
-    )
-    bundle = client.fetch_day_bundle(today)
+    if oura_bundle is not None:
+        bundle = oura_bundle
+    else:
+        client = oura_mod.OuraClient(
+            client_id=cfg.oura_client_id,
+            client_secret=cfg.oura_client_secret,
+            tokens_path=cfg.oura_tokens_path,
+        )
+        bundle = client.fetch_day_bundle(today)
     readiness = bundle.get("readiness") if isinstance(bundle.get("readiness"), dict) else None
     sleep = bundle.get("sleep") if isinstance(bundle.get("sleep"), dict) else None
     activity = bundle.get("activity") if isinstance(bundle.get("activity"), dict) else None
@@ -130,6 +155,10 @@ def report(cfg: Config, store: Store | None = None) -> dict:
         else:
             yesterday_trained_a = status_a.trained
 
+    scoreboard = closed_week_scoreboard(store, a, today)
+    if scoreboard:
+        result["scoreboard"] = scoreboard
+
     sms.send_sms(
         cfg,
         a,
@@ -139,6 +168,7 @@ def report(cfg: Config, store: Store | None = None) -> dict:
             today_intent=today_intent,
             yesterday_trained=yesterday_trained_a,
             ask_yesterday=ask_yesterday_a,
+            scoreboard=scoreboard,
         ),
     )
     result["actions"].append({"to": "A", "kind": "report"})
@@ -379,11 +409,17 @@ def weekly(cfg: Config, store: Store | None = None) -> dict:
 def maybe_send_partner_update_after_inbound(
     cfg: Config,
     store: Store,
+    *,
+    now: datetime | None = None,
 ) -> bool:
     """Late path: if both complete, local time ≥10:00 NY, and not yet sent."""
     a, b = cfg.require_participants()
     tz = _tz(cfg)
-    now = datetime.now(tz)
+    now = now or datetime.now(tz)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=tz)
+    else:
+        now = now.astimezone(tz)
     if now.hour < 10:
         return False
     today_s = now.date().isoformat()

@@ -37,6 +37,8 @@ class Config:
     database_path: Path
     webhook_host: str
     webhook_port: int
+    surprise_p_a: float
+    surprise_p_b: float
 
     @classmethod
     def from_env(cls) -> Config:
@@ -59,6 +61,8 @@ class Config:
             database_path=Path(db),
             webhook_host=_env("WEBHOOK_HOST", "0.0.0.0") or "0.0.0.0",
             webhook_port=int(port_s),
+            surprise_p_a=float(_env("SURPRISE_P_A", "0.30") or "0.30"),
+            surprise_p_b=float(_env("SURPRISE_P_B", "0.15") or "0.15"),
         )
 
     def require_twilio(self) -> tuple[str, str]:

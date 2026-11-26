@@ -74,6 +74,25 @@ class Store:
                     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                     PRIMARY KEY (participant, week_of)
                 );
+
+                CREATE TABLE IF NOT EXISTS processed_inbound (
+                    sid TEXT PRIMARY KEY,
+                    processed_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    confirm_sent INTEGER NOT NULL DEFAULT 0
+                );
+
+                CREATE TABLE IF NOT EXISTS meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS surprise_sent (
+                    participant TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    hook TEXT,
+                    sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (participant, date)
+                );
                 """
             )
             cols = {
@@ -275,3 +294,96 @@ class Store:
                 (participant, week_start_mon, week_end_sun),
             ).fetchone()
             return int(row["n"]) if row else 0
+
+
+    def inbound_was_processed(self, sid: str) -> bool:
+        if not sid:
+            return False
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM processed_inbound WHERE sid = ?", (sid,)
+            ).fetchone()
+            return row is not None
+
+    def inbound_confirm_sent(self, sid: str) -> bool:
+        if not sid:
+            return False
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT confirm_sent FROM processed_inbound WHERE sid = ?",
+                (sid,),
+            ).fetchone()
+            return bool(row and row["confirm_sent"])
+
+    def mark_inbound_processed(self, sid: str, *, confirm_sent: bool) -> None:
+        if not sid:
+            return
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO processed_inbound (sid, processed_at, confirm_sent)
+                VALUES (?, datetime('now'), ?)
+                ON CONFLICT(sid) DO UPDATE SET
+                    confirm_sent = CASE
+                        WHEN excluded.confirm_sent = 1 OR processed_inbound.confirm_sent = 1
+                        THEN 1 ELSE 0 END
+                """,
+                (sid, 1 if confirm_sent else 0),
+            )
+
+    def get_meta(self, key: str) -> str | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = ?", (key,)
+            ).fetchone()
+            return None if not row else row["value"]
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO meta (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value),
+            )
+
+    def record_surprise(self, participant: str, date: str, hook: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO surprise_sent (participant, date, hook, sent_at)
+                VALUES (?, ?, ?, datetime('now'))
+                ON CONFLICT(participant, date) DO UPDATE SET
+                    hook = excluded.hook,
+                    sent_at = datetime('now')
+                """,
+                (participant, date, hook),
+            )
+
+    def surprise_dates(
+        self, participant: str, week_start: str, week_end: str
+    ) -> list[str]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT date FROM surprise_sent
+                WHERE participant = ? AND date >= ? AND date <= ?
+                ORDER BY date
+                """,
+                (participant, week_start, week_end),
+            ).fetchall()
+            return [str(r["date"]) for r in rows]
+
+    def last_surprise_date(self, participant: str) -> str | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT date FROM surprise_sent
+                WHERE participant = ?
+                ORDER BY date DESC
+                LIMIT 1
+                """,
+                (participant,),
+            ).fetchone()
+            return None if not row else str(row["date"])

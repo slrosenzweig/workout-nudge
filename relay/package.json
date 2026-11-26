@@ -1,0 +1,7 @@
+{
+  "name": "workout-nudge-sms-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Twilio Function that forwards inbound SMS to the workout-nudge webhook",
+  "dependencies": {}
+}
